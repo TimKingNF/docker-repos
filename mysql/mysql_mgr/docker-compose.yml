@@ -1,0 +1,42 @@
+# 构建mysql集群
+version: '2'
+services:
+  mysql-1:
+    image: mysql:latest
+    container_name: mysql-1
+    ports:
+      - "36001:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    volumes:
+      - ./data/mysql-1:/var/lib/mysql
+      - ./cnf/mysql-1:/etc/mysql/conf.d
+      - ./01_init.sql:/docker-entrypoint-initdb.d/01_init.sql
+
+  mysql-2:
+    image: mysql:latest
+    container_name: mysql-2
+    ports:
+      - "36002:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    depends_on:
+      - mysql-1
+    volumes:
+      - ./data/mysql-2:/var/lib/mysql
+      - ./cnf/mysql-2:/etc/mysql/conf.d
+      - ./01_init.sql:/docker-entrypoint-initdb.d/01_init.sql
+
+  mysql-3:
+    image: mysql:latest
+    container_name: mysql-3
+    ports:
+      - "36003:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=root
+    depends_on:
+      - mysql-1
+    volumes:
+      - ./data/mysql-3:/var/lib/mysql
+      - ./cnf/mysql-3:/etc/mysql/conf.d
+      - ./01_init.sql:/docker-entrypoint-initdb.d/01_init.sql

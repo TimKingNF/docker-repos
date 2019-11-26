@@ -1,0 +1,95 @@
+# Copyright (c) 2015, 2016, Oracle and/or its affiliates. All rights reserved.
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License, version 2.0,
+# as published by the Free Software Foundation.
+#
+# This program is also distributed with certain software (including
+# but not limited to OpenSSL) that is licensed under separate terms,
+# as designated in a particular file or component or in included license
+# documentation.  The authors of MySQL hereby grant you an additional
+# permission to link the program and your derivative works with the
+# separately licensed software that they have included with MySQL.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License, version 2.0, for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301  USA
+
+#
+# The MySQL  Client configuration file.
+#
+# For explanations see
+# http://dev.mysql.com/doc/mysql/en/server-system-variables.html
+
+[mysql]
+
+
+[mysqld]
+default_authentication_plugin = mysql_native_password
+
+# 启用全局事务标示符
+gtid_mode=ON
+
+# 必须将此值设置为ON，以指示MySQL执行事务安全语句，以确保复制数据时的一致性
+enforce_gtid_consistency=ON
+
+# 设置为NONE。这使MySQL无法为二进制日志中发生的每个事件编写校验和。通过将该值设置为NONE，我们指示服务器通过检查事件的长度而不是生成校验和来验证事件的写入时间。
+binlog_checksum=NONE
+
+# 该值确定是否应该进行二进制日志记录。我们将此值设置为binlog以便进行组复制。二进制日志记录负责记录数据库中发生的所有更改。
+log_bin=binlog
+
+# 此值设置为ON，以允许成员彼此记录更新。换句话说，该指令将复制服务器链接在一起。
+log_slave_updates=ON
+
+# 这指定使用的二进制日志记录格式。在本例中，我们将使用ROW格式。由于数据库上的行锁较少，这可以实现最安全的基于行的复制形式和更高级别的并发性。
+binlog_format=ROW
+
+# 当设置为TABLE时，该指令允许MySQL将有关主二进制日志文件和位置的详细信息存储到表中，而不是文件中，以加快复制速度。
+master_info_repository=TABLE
+
+# 设置为TABLE时，它将 MySQL配置为将复制信息存储为InnoDB表。
+relay_log_info_repository=TABLE
+
+# 组设置
+
+# server必须为每个事务收集写集合，并使用XXHASH64哈希算法将其编码为散列
+# 这指示MySQL服务器收集写集并使用哈希算法对其进行编码。在这种情况下，我们使用XXHASH64算法。写集由每个记录上的主键定义。
+transaction_write_set_extraction=XXHASH64
+
+# 告知插件加入或创建组命名，UUID
+loose-group_replication_group_name="d9ba453e-76f9-4ef0-95ac-3d2f2d0013a1"
+
+# server启动时不自启组复制,为了避免每次启动自动引导具有相同名称的第二个组,所以设置为OFF。
+# (初始化数据库时设置为off, 后续修改为on)
+loose-group_replication_start_on_boot=off
+
+# 此选项指示服务器是否初始化组。我们将只在服务器1上按需运行此选项，以避免创建多个组。所以，我们暂时将它关闭。
+loose-group_replication_bootstrap_group=off
+
+# 此参数有助于使用唯一ID标识组中的每个成员。您必须为参与组复制的每台服务器使用不同的值
+server_id=2
+
+# 告诉插件使用IP地址，端口24901用于接收组中其他成员转入连接
+loose-group_replication_local_address="mysql-2:24901"
+
+# 启动组server，种子server，加入组应该连接这些的ip和端口；其他server要加入组得由组成员同意
+loose-group_replication_group_seeds="mysql-1:24901,mysql-2:24901,mysql-3:24901"
+bind-address="0.0.0.0"
+report_host="mysql-2"
+
+# 使用多线程进行线程同步
+slave_parallel_workers=10
+# 确保并行事务的最终提交与组复制所要求的顺序和原始事务顺序相同
+slave_preserve_commit_order=1
+# 设置从属服务器允许执行的类型
+slave_parallel_type=LOGICAL_CLOCK
+
+# 多主设置
+loose-group_replication_single_primary_mode=off
+loose-group_replication_enforce_update_everywhere_checks=on

@@ -1,0 +1,28 @@
+# sentinel 配置
+# redis-sentinel /usr/local/etc/redis/sentinel.conf
+# redis-cli -p 26379
+
+# 以后台进程模式运行
+daemonize yes
+
+# sentinel 的端口号, 默认是 26379
+port 27000
+
+# redis-master是主数据的别名，考虑到故障恢复后主数据库的地址和端口号会发生变化，哨兵提供了命令可以通过别名获取主数据库的地址和端口号。
+# 初次配置时主数据库的地址和端口号，当主数据库发生变化时，哨兵会自动更新这个配置，不需要我们去关心。
+# 最后一个参数2, 表示要执行故障恢复操作前至少需要几个sentinel节点同意, 一般为N/2+1个.
+sentinel monitor redis-master redis-1 6379 2
+
+# Sentinel 认为服务器已经断线所需的毫秒数,设置太短可能导致误切换
+sentinel down-after-milliseconds redis-master 5000
+
+sentinel failover-timeout redis-master 180000
+
+# 在执行故障转移时， 最多可以有多少个从服务器同时对新的主服务器进行同步， 这个数字越小， 完成故障转移所需的时间就越长
+sentinel parallel-syncs redis-master 1
+
+# 配置主从访问的授权密码, 必须和 redis.conf 中的 master auth 一样
+sentinel auth-pass redis-master foobar
+
+# 日志所在路径
+logfile "/data/sentinel.log"

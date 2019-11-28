@@ -1,0 +1,72 @@
+# 构建 redis cluster 案例
+version: '2'
+services:
+  redis-1:
+    image: redis:latest
+    container_name: redis-1
+    network_mode: host
+    volumes:
+      - ./cnf/redis-1/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-1/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-2:
+    image: redis:latest
+    container_name: redis-2
+    network_mode: host
+    volumes:
+      - ./cnf/redis-2/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-2/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-3:
+    image: redis:latest
+    container_name: redis-3
+    network_mode: host
+    volumes:
+      - ./cnf/redis-3/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-3/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-4:
+    image: redis:latest
+    container_name: redis-4
+    network_mode: host
+    volumes:
+      - ./cnf/redis-4/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-4/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-5:
+    image: redis:latest
+    container_name: redis-5
+    network_mode: host
+    volumes:
+      - ./cnf/redis-5/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-5/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-6:
+    image: redis:latest
+    container_name: redis-6
+    network_mode: host
+    volumes:
+      - ./cnf/redis-6/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-6/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]
+
+  redis-7:
+    image: redis:latest
+    container_name: redis-7
+    network_mode: host
+    volumes:
+      - ./cnf/redis-7/:/usr/local/etc/redis/:rw
+      - ./start_up.sh:/usr/local/etc/redis/start_up.sh
+      - ./data/redis-7/:/data:rw
+    command: [/bin/bash, /usr/local/etc/redis/start_up.sh]

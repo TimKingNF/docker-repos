@@ -1,0 +1,35 @@
+# mongo replica set 案例
+version: '2'
+services:
+  mongo-1:
+    image: mongo:latest
+    container_name: mongo-1
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongo-1:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, replset
+    ]
+
+  mongo-2:
+    image: mongo:latest
+    container_name: mongo-2
+    ports:
+      - "27018:27017"
+    volumes:
+      - ./data/mongo-2:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, replset
+    ]
+
+  mongo-3:
+    image: mongo:latest
+    container_name: mongo-3
+    ports:
+      - "27019:27017"
+    volumes:
+      - ./data/mongo-3:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, replset
+    ]

@@ -1,0 +1,14 @@
+# 单独启动 mongos 案例
+version: '2'
+services:
+  # mongos
+  mongos:
+    image: mongo:latest
+    container_name: mongos
+    ports:
+      - "27023:27017"
+    volumes:
+      - ./data/mongo-7:/data/db
+    command: [
+      mongos, --bind_ip, "*", --configdb, "config/mongo-config-1:27019,mongo-config-2:27019"
+    ]

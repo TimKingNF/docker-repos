@@ -1,0 +1,73 @@
+# mongo sharding 案例
+version: '2'
+services:
+  # Shard-1
+  shard-1-mongo-1:
+    image: mongo:latest
+    container_name: shard-1-mongo-1
+    ports:
+      - "27017:27018"
+    volumes:
+      - ./data/mongo-1:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, shard-1, --shardsvr
+    ]
+
+  shard-1-mongo-2:
+    image: mongo:latest
+    container_name: shard-1-mongo-2
+    ports:
+      - "27018:27018"
+    volumes:
+      - ./data/mongo-2:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, shard-1, --shardsvr
+    ]
+
+  shard-1-mongo-3:
+    image: mongo:latest
+    container_name: shard-1-mongo-3
+    ports:
+      - "27019:27018"
+    volumes:
+      - ./data/mongo-3:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, shard-1, --shardsvr
+    ]
+
+  # Shard-2
+  shard-2-mongo-1:
+    image: mongo:latest
+    container_name: shard-2-mongo-1
+    environment:
+      HOSTNAME: shard-2-mongo-1
+    ports:
+      - "27020:27018"
+    volumes:
+      - ./data/mongo-4:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, shard-2, --shardsvr
+    ]
+
+  # config server 同样也是一个 ReplicaSet
+  mongo-config-1:
+    image: mongo:latest
+    container_name: mongo-config-1
+    ports:
+      - "27021:27019"
+    volumes:
+      - ./data/mongo-5:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, config, --configsvr
+    ]
+
+  mongo-config-2:
+    image: mongo:latest
+    container_name: mongo-config-2
+    ports:
+      - "27022:27019"
+    volumes:
+      - ./data/mongo-6:/data/db
+    command: [
+      mongod, --bind_ip, "*", -replSet, config, --configsvr
+    ]

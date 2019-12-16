@@ -44,6 +44,12 @@ mysql -hlocalhost -P36001 -uroot -proot -e"SELECT * FROM performance_schema.repl
 
 可以看到有3个节点,  `MEMBER_STATE` 为 `ONLINE` , `MEMBER_ROLE`为`PRIMARY`, 说明 MGR 多主模式启动成功.
 
+```sql
+CREATE DATABASE test;
+CREATE TABLE test.messages (id int auto_increment, message VARCHAR(250), PRIMARY KEY ( `id` ));
+INSERT INTO test.messages(message) VALUES ('hello');
+```
+
 ## Single Primary Mode
 
 修改 `cnf/mysql-*/mysql.conf` 中的配置文件
@@ -72,3 +78,11 @@ START GROUP_REPLICATION;
 ```
 
 最后检查MGR集群是否启动成功.
+
+## Run In k8s
+
+```bash
+make k8s-init
+make k8s-run
+```
+

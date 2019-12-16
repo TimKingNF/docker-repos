@@ -1,0 +1,247 @@
+# Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-mgr
+  labels:
+    app: mysql-mgr
+spec:
+  ports:
+  - name: mysql  # 对外直接暴露3306端口
+    port: 3306
+  clusterIP: None
+  selector:
+    app: mysql-mgr
+---
+# Read Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-mgr-read
+  labels:
+    app: mysql-mgr
+spec:
+  ports:
+  - name: mysql
+    port: 3306
+  selector:
+    app: mysql-mgr
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-mgr
+spec:
+  serviceName: mysql-mgr
+
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mysql-mgr
+  podManagementPolicy: Parallel  # 并行启动
+
+  template:
+    metadata:
+      labels:
+        app: mysql-mgr
+    spec:
+      initContainers:
+      - name: init-mysql
+        image: mysql:latest
+        env:
+        - name: MGR_PORT
+          valueFrom:
+            configMapKeyRef:  # 这里引用mysql-mgr configMap的 mgr.port对象
+              name: mysql-mgr
+              key: mgr.port
+        volumeMounts:  # 指定挂载路径
+        - name: conf  # 存放conf.d配置
+          mountPath: /mnt/conf.d
+        - name: config-map
+          mountPath: /mnt/config-map
+        - name: init-sql
+          mountPath: /docker-entrypoint-initdb.d
+        command:
+        - bash
+        - "-c"
+        - |
+          set -ex
+          # 从Pod的序号,生成server-id
+          hostname=`hostname`
+          [[ $hostname =~ ^(.*)-([0-9]+)$ ]] || exit 1
+          service_name=${BASH_REMATCH[1]}
+          ordinal=${BASH_REMATCH[2]}
+          server_id=$((100 + $ordinal))
+          local_dns="$hostname.mysql-mgr"
+          seeds=""
+
+          # 生成seeds
+          for i in {0..2}; do
+            seeds+="$service_name-$i.mysql-mgr:$MGR_PORT,"
+          done
+          seeds=${seeds%?}
+
+          # 替换变量进去
+          cp /mnt/config-map/template.cnf /mnt/conf.d/mysqld.cnf
+          sed -i "s/\$LOCAL_ADDRESS/$local_dns:$MGR_PORT/g" /mnt/conf.d/mysqld.cnf
+          sed -i "s/\$LOCAL_HOST/$local_dns/g" /mnt/conf.d/mysqld.cnf
+          sed -i "s/\$SERVER_ID/$server_id/g" /mnt/conf.d/mysqld.cnf
+          sed -i "s/\$SEEDS/$seeds/g" /mnt/conf.d/mysqld.cnf
+          # 复制一份备份
+          cp /mnt/conf.d/mysqld.cnf /mnt/conf.d/mysqld.cnf.bak
+          sed -i "s/\$START_GR_ON_BOOT/off/g" /mnt/conf.d/mysqld.cnf
+          sed -i "s/\$BOOTSTRAP_GR/off/g" /mnt/conf.d/mysqld.cnf
+
+          # 复制初始化sql
+          cp /mnt/config-map/init.sql /docker-entrypoint-initdb.d/
+      containers:
+      # siedcar, 帮助处理初始化工作, 这里主要是用到客户端
+      - name: sidecar
+        image: mysql:latest
+        volumeMounts:
+        - name: conf  # 需要挂载配置文件, 在最后配置成功的时候
+          mountPath: /etc/mysql/conf.d
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "root"
+        - name: MYSQL_MGR_INIT_PORT
+          value: "3307"
+        - name: SUCCESS_FLAG
+          value: "/etc/mysql/conf.d/_SUCCESS"
+        ports:
+          - name: ncat
+            containerPort: 3307
+        command:
+        - bash
+        - "-c"
+        - |
+          set -ex
+          # 如果 _SUCCESS 标志存在, 说明已经初始化成功, sidecar无需做什么, 直接退出(重启的时候使用)
+          [[ -f $SUCCESS_FLAG ]] && while true; do sleep 1; done
+          [[ `hostname` =~ ^(.*)-([0-9]+)$ ]] || exit 1
+          service_name=${BASH_REMATCH[1]}
+          ordinal=${BASH_REMATCH[2]}
+
+          # http_proxy="http://192.168.3.125:10087/"
+          # https_proxy=$http_proxy
+          apt update
+          # 非Pod-0则一直等待_SUCCESS标志
+          if [[ ! $ordinal -eq 0 ]]; then
+            apt install -y nmap
+            # 监听3307端口等待master发送过来的请求, 一旦收到请求就写入_SUCCESS标志
+            ncat --listen --max-conns=1 $MYSQL_MGR_INIT_PORT -c "touch $SUCCESS_FLAG"
+            # 修改配置文件
+            cp /etc/mysql/conf.d/mysqld.cnf.bak /etc/mysql/conf.d/mysqld.cnf
+            sed -i "s/\$START_GR_ON_BOOT/on/g" /etc/mysql/conf.d/mysqld.cnf
+            sed -i "s/\$BOOTSTRAP_GR/off/g" /etc/mysql/conf.d/mysqld.cnf
+
+            while true; do sleep 1; done
+          fi
+
+          apt install -y netcat
+
+          # 等待Pod-0内的mysql启动完成
+          until mysql -h127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD -e "SELECT 1" >/dev/null; do sleep 1; done
+
+          # 启动组, 组启动时需要判断事先是否已经启动组成功, 防止sidecar重启重试失败
+          if [[ ! -f /etc/mysql/conf.d/_INIT-0 ]]; then
+            # 连接master启动组
+            mysql -h127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD <<-EOF
+              SET GLOBAL group_replication_bootstrap_group=ON;
+              START GROUP_REPLICATION;
+              SET GLOBAL group_replication_bootstrap_group=OFF;
+          EOF
+            touch /etc/mysql/conf.d/_INIT-0
+          fi
+
+          # 然后master 需要等待, 其他从节点全部都启动完毕, 通过连接查询@@global.gtid_executed
+          for i in {1..2}; do
+            # 如果已经初始化成功, 则重试的是否无需再次执行
+            [[ -f /etc/mysql/conf.d/_INIT-$i ]] && continue
+
+            host="$service_name-$i.mysql-mgr"
+            # 等待其他Pod完成
+            until mysql -h $host -uroot -p$MYSQL_ROOT_PASSWORD -e "SELECT 1" >/dev/null; do sleep 1; done
+            mysql_slave_cmd="mysql -h$host -uroot -p$MYSQL_ROOT_PASSWORD"
+            cmd_ret=`${mysql_slave_cmd} -sN -e"select @@global.gtid_executed;"`
+            gtid=${cmd_ret:0:36}
+            min=${cmd_ret:37:1}
+            max=${cmd_ret:39:1}
+
+            # 拼接sql
+            run_sql=""
+            for j in $(seq ${min} ${max}); do
+              run_sql+="SET GTID_NEXT='${gtid}:${j}';begin;commit;"
+            done
+            run_sql+="SET GTID_NEXT='AUTOMATIC';"
+            echo ${run_sql} > /tmp/tmp.sql
+
+            # 在Pod-0上执行
+            mysql -h127.0.0.1 -uroot -p$MYSQL_ROOT_PASSWORD < /tmp/tmp.sql
+
+            # 连接从库, 启动MGR
+            ${mysql_slave_cmd} -e"START GROUP_REPLICATION;"
+
+            # 等待连接从节点3307端口
+            until nc -v $host $MYSQL_MGR_INIT_PORT; do sleep 1; done
+
+            # 写入成功标志
+            touch /etc/mysql/conf.d/_INIT-$i
+          done
+
+          cp /etc/mysql/conf.d/mysqld.cnf.bak /etc/mysql/conf.d/mysqld.cnf
+          sed -i "s/\$START_GR_ON_BOOT/on/g" /etc/mysql/conf.d/mysqld.cnf
+          sed -i "s/\$BOOTSTRAP_GR/on/g" /etc/mysql/conf.d/mysqld.cnf
+
+          # 往 config-map 写一个文件表示已经启动成功
+          touch $SUCCESS_FLAG
+          while true; do sleep 1; done  # 阻塞保持 sidecar 运行即可
+      - name: mysql
+        image: mysql:latest
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "root"
+        ports:
+        - name: mysql
+          containerPort: 3306
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/mysql
+          subPath: mysql
+        - name: conf
+          mountPath: /etc/mysql/conf.d
+        - name: init-sql
+          mountPath: /docker-entrypoint-initdb.d
+        resources:  # 资源限制
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        livenessProbe:  # 存活探针
+          exec:
+            command: ["mysqladmin", "ping"]
+          initialDelaySeconds: 30  # 等待延迟30秒后执行
+          periodSeconds: 10  # 10秒检查一次
+          timeoutSeconds: 5  # 超时5s
+        readinessProbe:  # 服务是否就绪,如果失败则从Service中踢出该Pod
+          exec:
+            # 通过TCP连接方式进行健康检查
+            command: ["mysql", "-h127.0.0.1", "-uroot", "-proot", "-e", "SELECT 1"]
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          timeoutSeconds: 1
+      volumes:
+      - name: conf  # 指定内存盘
+        emptyDir: {}
+      - name: init-sql
+        emptyDir: {}
+      - name: config-map  # 配置文件
+        configMap:
+          name: mysql-mgr
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi

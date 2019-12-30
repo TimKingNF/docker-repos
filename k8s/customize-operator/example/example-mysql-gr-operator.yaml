@@ -1,0 +1,6 @@
+apiVersion: datahub.txzing.com/v1
+kind: MysqlGROperator
+metadata:
+  name: mysql-gr-operator
+spec:
+  size: 3

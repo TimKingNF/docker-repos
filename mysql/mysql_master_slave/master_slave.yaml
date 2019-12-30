@@ -1,0 +1,176 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql-master-slave
+spec:
+  serviceName: mysql  # 指定刚刚创建的Headless Service
+
+  replicas: 3  # mysql集群中有1个master节点,2个slave节点
+  selector:
+    matchLabels:
+      app: mysql-master-slave
+
+  # 创建Pod的模版,这里用的都是同一个镜像
+  template:
+    metadata:
+      labels:
+        app: mysql-master-slave
+    spec:
+      initContainers:
+        - name: init-mysql
+          image: mysql:5.7
+          volumeMounts:  # 指定挂载路径
+            - name: conf  # 用刚刚的内存卷存放配置
+              mountPath: /mnt/conf.d  # 该内存卷实际上是join在Infra容器中的,所以即使initContainer退出也没有关系
+            - name: config-map  # 加载config-map
+              mountPath: /mnt/config-map
+          command:
+            - bash
+            - "-c"
+            - |
+              set -ex  # 防止中间出现非0导致流程执行退出
+              # 从Pod的序号,生成server-id
+              [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+              ordinal=${BASH_REMATCH[1]}
+              echo "[mysqld]" > /mnt/conf.d/server-id.cnf
+              # 由于 server-id=0 有特殊含义，我们给 ID 加一个 100 来避开它
+              echo server-id=$((100 + $ordinal)) >> /mnt/conf.d/server-id.cnf
+              # 如果Pod序号是0, 说明是master节点, 然后从config-map中复制master的配置文件
+              # 否则复制slave配置文件
+              if [[ $ordinal -eq 0 ]]; then
+                cp /mnt/config-map/master.cnf /mnt/conf.d/
+              else
+                cp /mnt/config-map/slave.cnf /mnt/conf.d/
+              fi
+        # 这个容器用于从前一个Pod处同步数据
+        - name: clone-mysql
+          image: gcr.io/google-samples/xtrabackup:1.0
+          volumeMounts:
+            - name: data  # 将数据卷挂载到相应的数据存放目录
+              mountPath: /var/lib/mysql
+              subPath: mysql
+            - name: conf  # 挂载前面的内存卷
+              mountPath: /etc/mysql/conf.d
+          command:
+            - bash
+            - "-c"
+            - |
+              set -ex
+              # 拷贝操作只需要在第一次启动时进行，所以如果数据已经存在，跳过
+              [[ -d /var/lib/mysql/mysql ]] && exit 0
+              # Master 节点 (序号为 0) 不需要做这个操作
+              [[ `hostname` =~ -([0-9]+)$ ]] || exit 1
+              # 在当前为第一个slave节点的时候,后于master节点启动,去访问前一个节点的3307服务,触发master备份
+              # 将 xtrabackup_binlog_info 保存在第一个slave数据目录中
+              # 在当前为第二个slave节点时,访问第一个slave节点的3307服务,触发slave备份
+              # 将 xtrabackup_slave_info 保存在第二个slave数据目录中
+              ordinal=${BASH_REMATCH[1]}
+              [[ $ordinal -eq 0 ]] && exit 0
+              # 使用 ncat 指令，远程地从前一个节点拷贝数据到本地
+              # 这里的mysql-master-slave-0.mysql就是DNS记录,通过该DNS找到具体Pod
+              ncat --recv-only mysql-master-slave-$(($ordinal-1)).mysql 3307 | xbstream -x -C /var/lib/mysql
+              # 执行 --prepare, 将拷贝过来的数据用作恢复
+              xtrabackup --prepare --target-dir=/var/lib/mysql
+      containers:
+        # sidecar Pod, 帮助处理初始化工作
+        - name: xtrabackup
+          image: gcr.io/google-samples/xtrabackup:1.0
+          ports:
+            - name: xtrabackup
+              containerPort: 3307
+          volumeMounts:
+            - name: data  # 针对每个容器都挂载一个data卷
+              mountPath: /var/lib/mysql
+              subPath: mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+          command:
+            - bash
+            - "-c"
+            - |
+              set -ex
+              cd /var/lib/mysql
+              # 从备份信息文件中读取MASTER_LOG_FILEM和MASTER_LOG_POS这两个字段的值,用于初始同步集群
+              if [[ -f xtrabackup_slave_info ]]; then
+                # 如果xtrabackup_slave_info存在,说明备份数据来自于另一个slave节点,直接使用即可
+                mv xtrabackup_slave_info change_master_to.sql.in
+                rm -f xtrabackup_binlog_info
+              elif [[ -f xtrabackup_binlog_info ]]; then
+                # 如果存在xtrabackup_binlog_info文件,说明备份数据来源于master节点,当前当前是第一个slave节点,需要解析并同步
+                [[ `cat xtrabackup_binlog_info` =~ ^(.*?)[[:space:]]+(.*?)$ ]] || exit 1
+                rm -f xtrabackup_binlog_info
+                # 把两个字段的值拼装成 SQL，写入 change_master_to.sql.in 文件
+                echo "CHANGE MASTER TO MASTER_LOG_FILE='${BASH_REMATCH[1]}',\
+                      MASTER_LOG_POS=${BASH_REMATCH[2]}" > change_master_to.sql.in
+              fi
+
+              # 如果存在change_master_to.sql.in,则说明需要做集群初始化工作
+              if [[ -f change_master_to.sql.in ]]; then
+                # 等待mysql容器启动之后执行
+                until mysql -h 127.0.0.1 -e "SELECT 1"; do sleep 1; done
+
+                echo "Initializing replication from clone position"
+                mv change_master_to.sql.in change_master_to.sql.orig  # 先改名,防止重复执行
+                # 执行 slave 初始化sql
+                mysql -h 127.0.0.1 <<-EOF
+                  $(<change_master_to.sql.orig),
+                  MASTER_HOST='mysql-master-slave-0.mysql',
+                  MASTER_USER='root',
+                  MASTER_PASSWORD='',
+                  MASTER_CONNECT_RETRY=10;
+                  START SLAVE;
+              EOF
+              fi
+
+              # 使用ncat监听3307端口,在收到传输请求之后,执行备份, 生成备份文件并返回给请求者
+              # 在当前为master节点的时候, 由于前面的判断均不会执行,此处直接监听3307端口等待备份并返回数据
+              exec ncat --listen --keep-open --send-only --max-conns=1 3307 -c \
+                "xtrabackup --backup --slave-info --stream=xbstream --host=127.0.0.1 --user=root"
+        # Pod中运行mysql的容器
+        - name: mysql
+          image: mysql:5.7
+          env:
+            - name: MYSQL_ALLOW_EMPTY_PASSWORD
+              value: "1"
+          ports:
+            - name: mysql
+              containerPort: 3306
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+              subPath: mysql
+            - name: conf
+              mountPath: /etc/mysql/conf.d
+          resources:  # 申请的资源
+            requests:
+              cpu: 500m
+              memory: 1Gi
+          livenessProbe:  # 存活探针
+            exec:
+              command: ["mysqladmin", "ping"]
+            initialDelaySeconds: 30  # 等待延迟30秒后执行
+            periodSeconds: 10  # 10秒检查一次
+            timeoutSeconds: 5  # 超时5s
+          readinessProbe:  # 服务是否就绪,如果失败则从Service中踢出该Pod
+            exec:
+              # 通过TCP连接方式进行健康检查
+              command: ["mysql", "-h", "127.0.0.1", "-e", "SELECT 1"]
+            initialDelaySeconds: 5
+            periodSeconds: 2
+            timeoutSeconds: 1
+      volumes:
+        - name: conf  # 指定一块内存fs
+          emptyDir: {}
+        - name: config-map  # 指定配置信息的挂载卷
+          configMap:
+            name: mysql-master-slave
+  # Pod挂载的PVC模版
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        # storageClassName: rook-ceph-block  # 使用ceph插件
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi

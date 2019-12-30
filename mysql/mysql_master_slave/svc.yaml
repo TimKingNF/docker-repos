@@ -1,0 +1,28 @@
+# 这里在一个配置文件中创建了两个服务
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  labels:
+    app: mysql
+spec:
+  ports:
+    - name: mysql
+      port: 3306
+  clusterIP: None  # Headless Service, 使用DNS获取到Pod的IP, 这里是为了让写请求能够通过专门的DNS访问到master节点
+  selector:
+    app: mysql-master-slave
+---
+# 这里创建一个专门的Service专门用于处理读请求,这是因为所有节点均可读
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-read
+  labels:
+    app: mysql
+spec:
+  ports:
+    - name: mysql
+      port: 3306
+  selector:
+    app: mysql-master-slave

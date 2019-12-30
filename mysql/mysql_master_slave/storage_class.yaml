@@ -1,0 +1,19 @@
+# pool使用插件创建PV的池
+apiVersion: ceph.rook.io/v1
+kind: CephBlockPool
+metadata:
+  name: replicapool
+  namespace: rook-ceph
+spec:
+  replicated:
+    size: 3
+---
+# 是自动地为集群里存在的每一个PVC，调用存储插件（Rook）创建对应的 PV，从而省去了手动创建 PV
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: rook-ceph-block
+provisioner: ceph.rook.io/block
+parameters:
+  pool: replicapool
+  clusterNamespace: rook-ceph

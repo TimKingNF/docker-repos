@@ -1,0 +1,185 @@
+# 配置文件
+apiVersion: v1
+data:
+  redis.conf: |
+    # 后台启动
+    # daemonize yes
+
+    # 日志目录
+    logfile "/data/redis.log"
+
+    # 设置密码
+    requirepass "foobar"
+
+    # 集群设置
+    # 因为所有slave 节点都可能变为 master 节点, 所以都需要设置主库密码
+    masterauth "foobar"
+
+    # 在60秒之内，如果有1000次写入的话，Redis就会自动触发BGSAVE命令, 生成快照文件
+    # BGSAVE 和 SAVE 的区别是, BGSAVE会fork一个子进程负责写入快照. 而SAVE会阻塞主进程
+    save 60 1000
+
+    # RDB 快照方式保存, 默认保存文件为dump.rdb
+    dbfilename "dump.rdb"
+
+    # 在创建快照失败后是否仍然继续执行写命令
+    stop-writes-on-bgsave-error no
+
+    # 是否对快照文件进行压缩
+    rdbcompression no
+
+    # 开启 AOF
+    appendonly yes
+
+    # 启用AOF之后的数据同步频率
+    # alaways: 每个Redis写命令都要同步写入硬盘。这样做会严重降低Redis 的速度 （不建议）
+    # everysec: 每秒执行一次同步，显式地将多个写命令同步到硬盘 （推荐，对性能没有太大影响）
+    # no: 让操作系统来决定应该何时进行同步。（不建议）
+    appendfsync everysec
+  sentinel.conf: |
+    # sentinel 配置
+    # redis-sentinel /usr/local/etc/redis/sentinel.conf
+    # redis-cli -p 26379
+
+    # 以后台进程模式运行
+    # daemonize yes
+
+    # sentinel 的端口号, 默认是 26379
+    port 26379
+
+    # redis-master是主数据的别名，考虑到故障恢复后主数据库的地址和端口号会发生变化，哨兵提供了命令可以通过别名获取主数据库的地址和端口号。
+    # 初次配置时主数据库的地址和端口号，当主数据库发生变化时，哨兵会自动更新这个配置，不需要我们去关心。
+    # 最后一个参数2, 表示要执行故障恢复操作前至少需要几个sentinel节点同意, 一般为N/2+1个.
+    # sentinel monitor redis-master redis-sentinel-0.rsheadless.default.svc.cluster.local 6379 2
+    sentinel monitor redis-master redis-sentinel-0.rsheadless.default.svc.cluster.local 6379 2
+
+    # Sentinel 认为服务器已经断线所需的毫秒数
+    sentinel deny-scripts-reconfig yes
+
+    # 在执行故障转移时， 最多可以有多少个从服务器同时对新的主服务器进行同步， 这个数字越小， 完成故障转移所需的时间就越长
+    sentinel down-after-milliseconds redis-master 5000
+
+    # 配置主从访问的授权密码, 必须和 redis.conf 中的 master auth 一样
+    sentinel auth-pass redis-master foobar
+
+    # 日志所在路径
+    logfile "/data/sentinel.log"
+
+kind: ConfigMap
+metadata:
+  name: conf
+  namespace: default
+---
+# Headless Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: rsheadless
+  labels:
+    app: redis-sentinel
+spec:
+  ports:
+  - name: redis
+    port: 6379
+  - name: sentinel
+    port: 26379
+  clusterIP: None
+  selector:
+    app: redis-sentinel
+---
+# Sentinel Service
+# 这是一个rollbin的服务, 用于绑定所有可用的sentinel
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-sentinel
+  labels:
+    app: redis-sentinel
+spec:
+  ports:
+  - name: sentinel
+    port: 26379
+  selector:
+    app: redis-sentinel
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis-sentinel
+spec:
+  serviceName: rsheadless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis-sentinel
+  template:
+    metadata:
+      labels:
+        app: redis-sentinel
+    spec:
+      # 因为redis sentinel 会修改配置文件, 所以这里复制一份配置文件过去
+      initContainers:
+      - name: init
+        image: redis:latest
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: config
+          mountPath: /config
+        command:
+        - bash
+        - "-c"
+        - |
+          set -ex
+          # 配置文件需要持久化, 因为redis-sentinel会修改配置文件
+          if [[ -f /data/redis.conf ]]; then
+            # 请求sentinel获取当前的master
+            ret=`redis-cli --csv -h redis-sentinel -p 26379 sentinel get-master-addr-by-name redis-master`
+            [[ $ret =~ ^\"(.*)\",\"(.*)\"$ ]] || exit 1
+            masterHost=${BASH_REMATCH[1]}
+            masterPort=${BASH_REMATCH[2]}
+
+            # 直接写入 redis.conf 中
+            echo "slaveof $masterHost $masterPort" >> /data/redis.conf
+            exit 0
+          fi
+
+          [[ `hostname` =~ ^(.*)-([0-9]+)$ ]] || exit 1
+          ordinal=${BASH_REMATCH[2]}
+
+          cp /config/*.conf /data/
+          # 添加slave配置
+          if [[ ! $ordinal -eq 0 ]]; then
+            echo "slaveof redis-sentinel-0.rsheadless.default.svc.cluster.local 6379" >> /data/redis.conf
+          fi
+      containers:
+      - name: redis
+        image: redis:latest
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        ports:
+        - name: server
+          containerPort: 6379
+        command: [ redis-server, /data/redis.conf ]
+      - name: sentinel
+        image: redis:latest
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        ports:
+        - name: server
+          containerPort: 26379
+        command: [ redis-sentinel, /data/sentinel.conf ]
+      volumes:
+      - name: config
+        configMap:
+          name: conf
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 1Gi

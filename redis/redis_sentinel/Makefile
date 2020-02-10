@@ -40,3 +40,11 @@ reset:
 	cp -f cnf/redis-1/redis.conf.bak cnf/redis-3/redis.conf
 	echo "slaveof redis-1 6379" >> cnf/redis-2/redis.conf
 	echo "slaveof redis-1 6379" >> cnf/redis-3/redis.conf
+
+.PHONY: k8s_run
+k8s_run:
+	kubectl apply -f ./k8s.yaml
+
+.PHONY: k8s_clean
+k8s_clean:
+	kubectl delete -f ./k8s.yaml

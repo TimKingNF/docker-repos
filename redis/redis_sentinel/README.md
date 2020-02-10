@@ -25,3 +25,9 @@ make up
 
 使用 `redis-cli -p 36379 sentinel slaves redis-master` 获取 Redis Slave 信息
 
+## k8s run
+
+```bash
+make k8s_run
+```
+

@@ -35,8 +35,10 @@ export http_proxy=$proxy
 export https_proxy=$proxy
 export HTTP_PROXY=$proxy
 export HTTPS_PROXY=$proxy
-wget https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+git clone https://github.com/coredns/deployment.git
 "
 
-sed -i 's/quay.io\/coreos/registry.cn-beijing.aliyuncs.com\/imcto/g' /vagrant/kube-flannel.yml
-kubectl apply -f /vagrant/kube-flannel.yml
+cd deployment/kubernetes
+./deploy.sh | kubectl apply -f -
+
+

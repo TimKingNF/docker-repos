@@ -5,7 +5,7 @@ if [[ `hostname` == "node1" ]]; then
   exit 1
 fi
 
-proxy="http://192.168.1.3:10087/"
+proxy="http://192.168.3.125:10087/"
 
 # 挂代理然后加入节点
 sudo -- bash -c "

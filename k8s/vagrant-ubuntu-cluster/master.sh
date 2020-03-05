@@ -35,10 +35,9 @@ export http_proxy=$proxy
 export https_proxy=$proxy
 export HTTP_PROXY=$proxy
 export HTTPS_PROXY=$proxy
-git clone https://github.com/coredns/deployment.git
+wget https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
 "
 
-cd deployment/kubernetes
-./deploy.sh | kubectl apply -f -
+kubectl apply -f kube-flannel.yml
 
 
